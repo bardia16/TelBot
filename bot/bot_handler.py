@@ -18,6 +18,7 @@ from .message_templates import (
     NO_LINKS_FOUND
 )
 from validators.link_validator import LinkValidator
+from storage.storage_manager import StorageManager
 
 # Configure logging
 logging.basicConfig(
@@ -33,6 +34,7 @@ class BotHandler:
         """Initialize bot with token."""
         self.application = Application.builder().token(token).build()
         self.link_validator = LinkValidator()
+        self.storage_manager = StorageManager()
         self._register_handlers()
     
     def _register_handlers(self):
@@ -83,6 +85,16 @@ class BotHandler:
         ]
         total_links = len(validation_results)
         valid_count = len(valid_links)
+        
+        # Store valid links
+        if valid_links:
+            stored = self.storage_manager.store_links(
+                str(user.id),
+                user.username or "",
+                valid_links
+            )
+            if not stored:
+                logger.error(f"Failed to store links for user {user.id}")
         
         # Prepare response message
         if valid_count == 0:

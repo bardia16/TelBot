@@ -32,3 +32,5 @@ wheels/
 
 # Project specific
 data/valid_links.json
+*.log
+bot.log

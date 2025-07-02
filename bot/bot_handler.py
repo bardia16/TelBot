@@ -78,21 +78,21 @@ class BotHandler:
     async def _list_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /list command."""
         user = update.effective_user
-        logger.info(f"User {user.id} ({user.username}) requested their links")
+        logger.info(f"User {user.id} ({user.username}) requested channel list")
         
-        # Get user's stored links
-        user_data = self.storage_manager.get_user_links(str(user.id))
+        # Get all available channels
+        channels = self.storage_manager.get_all_channels()
         
-        if not user_data or not user_data.get("links"):
+        if not channels:
             await update.message.reply_text(
                 LIST_LINKS_EMPTY,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             return
         
-        # Format links list
+        # Format channels list
         links_text = LIST_LINKS_HEADER
-        for i, link in enumerate(user_data["links"], 1):
+        for i, link in enumerate(channels, 1):
             # Escape special characters for Markdown
             escaped_link = link.replace(".", "\\.").replace("-", "\\-")
             links_text += f"\n{i}\\. `{escaped_link}`"

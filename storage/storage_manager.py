@@ -3,7 +3,7 @@
 import json
 import logging
 import os
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Set
 from threading import Lock
 
 # Configure logging
@@ -14,67 +14,102 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class StorageManager:
-    """Manages JSON-based storage for Telegram links."""
+    """Manages JSON-based storage for Telegram proxy channels."""
     
-    def __init__(self, storage_path: str = "data/valid_links.json"):
-        """Initialize storage manager."""
-        self.storage_path = storage_path
+    def __init__(self, 
+                 user_storage_path: str = "data/user_links.json",
+                 global_storage_path: str = "data/proxy_channels.json"):
+        """Initialize storage manager with separate files for user links and global channel list."""
+        self.user_storage_path = user_storage_path
+        self.global_storage_path = global_storage_path
         self.lock = Lock()  # For thread-safe file operations
         self._ensure_storage_exists()
     
     def _ensure_storage_exists(self):
-        """Create storage file and directory if they don't exist."""
-        os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
-        if not os.path.exists(self.storage_path):
-            with open(self.storage_path, 'w') as f:
+        """Create storage files and directory if they don't exist."""
+        os.makedirs(os.path.dirname(self.user_storage_path), exist_ok=True)
+        
+        # Initialize user storage if it doesn't exist
+        if not os.path.exists(self.user_storage_path):
+            with open(self.user_storage_path, 'w') as f:
                 json.dump({}, f)
+        
+        # Initialize global channel list if it doesn't exist
+        if not os.path.exists(self.global_storage_path):
+            with open(self.global_storage_path, 'w') as f:
+                json.dump({"channels": []}, f)
     
-    def _read_storage(self) -> Dict:
-        """Read the current storage content."""
+    def _read_user_storage(self) -> Dict:
+        """Read the user storage content."""
         try:
-            with open(self.storage_path, 'r') as f:
+            with open(self.user_storage_path, 'r') as f:
                 return json.load(f)
         except json.JSONDecodeError:
-            logger.error("Corrupted storage file, resetting to empty state")
+            logger.error("Corrupted user storage file, resetting to empty state")
             return {}
         except Exception as e:
-            logger.error(f"Error reading storage: {e}")
+            logger.error(f"Error reading user storage: {e}")
             return {}
     
-    def _write_storage(self, data: Dict):
-        """Write data to storage."""
+    def _read_global_storage(self) -> List[str]:
+        """Read the global channel list."""
         try:
-            with open(self.storage_path, 'w') as f:
+            with open(self.global_storage_path, 'r') as f:
+                data = json.load(f)
+                return data.get("channels", [])
+        except json.JSONDecodeError:
+            logger.error("Corrupted global storage file, resetting to empty state")
+            return []
+        except Exception as e:
+            logger.error(f"Error reading global storage: {e}")
+            return []
+    
+    def _write_user_storage(self, data: Dict):
+        """Write data to user storage."""
+        try:
+            with open(self.user_storage_path, 'w') as f:
                 json.dump(data, f, indent=2)
         except Exception as e:
-            logger.error(f"Error writing to storage: {e}")
+            logger.error(f"Error writing to user storage: {e}")
+            raise
+    
+    def _write_global_storage(self, channels: List[str]):
+        """Write data to global storage."""
+        try:
+            with open(self.global_storage_path, 'w') as f:
+                json.dump({"channels": channels}, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error writing to global storage: {e}")
             raise
     
     def store_links(self, user_id: str, username: str, links: List[str]) -> bool:
-        """Store valid links for a user."""
+        """Store valid links for a user and update global channel list."""
         if not links:
             return True
             
         with self.lock:
             try:
-                storage = self._read_storage()
-                
-                # Update or create user entry
-                if user_id not in storage:
-                    storage[user_id] = {
+                # Update user storage
+                user_storage = self._read_user_storage()
+                if user_id not in user_storage:
+                    user_storage[user_id] = {
                         "username": username,
                         "links": []
                     }
                 
-                # Update username if changed
-                storage[user_id]["username"] = username
+                user_storage[user_id]["username"] = username
+                existing_user_links = set(user_storage[user_id]["links"])
+                new_user_links = set(links)
+                user_storage[user_id]["links"] = list(existing_user_links | new_user_links)
                 
-                # Add new links (avoid duplicates)
-                existing_links = set(storage[user_id]["links"])
-                new_links = set(links)
-                storage[user_id]["links"] = list(existing_links | new_links)
+                # Update global channel list
+                global_channels = set(self._read_global_storage())
+                global_channels.update(links)
                 
-                self._write_storage(storage)
+                # Save both storages
+                self._write_user_storage(user_storage)
+                self._write_global_storage(sorted(list(global_channels)))
+                
                 return True
             except Exception as e:
                 logger.error(f"Error storing links for user {user_id}: {e}")
@@ -84,36 +119,61 @@ class StorageManager:
         """Get all links for a specific user."""
         with self.lock:
             try:
-                storage = self._read_storage()
+                storage = self._read_user_storage()
                 return storage.get(user_id)
             except Exception as e:
                 logger.error(f"Error retrieving links for user {user_id}: {e}")
                 return None
     
+    def get_all_channels(self) -> List[str]:
+        """Get the global list of all unique channels."""
+        with self.lock:
+            try:
+                return self._read_global_storage()
+            except Exception as e:
+                logger.error(f"Error retrieving global channel list: {e}")
+                return []
+    
     def remove_link(self, user_id: str, link: str) -> bool:
         """Remove a specific link for a user."""
         with self.lock:
             try:
-                storage = self._read_storage()
-                if user_id not in storage:
+                # Remove from user storage
+                user_storage = self._read_user_storage()
+                if user_id not in user_storage:
                     return False
                 
-                if link in storage[user_id]["links"]:
-                    storage[user_id]["links"].remove(link)
-                    self._write_storage(storage)
+                if link in user_storage[user_id]["links"]:
+                    user_storage[user_id]["links"].remove(link)
+                    self._write_user_storage(user_storage)
+                
+                # Update global storage
+                all_user_links: Set[str] = set()
+                for user_data in user_storage.values():
+                    all_user_links.update(user_data["links"])
+                
+                self._write_global_storage(sorted(list(all_user_links)))
                 return True
             except Exception as e:
                 logger.error(f"Error removing link for user {user_id}: {e}")
                 return False
     
     def clear_user_links(self, user_id: str) -> bool:
-        """Clear all links for a specific user."""
+        """Clear all links for a specific user and update global list."""
         with self.lock:
             try:
-                storage = self._read_storage()
-                if user_id in storage:
-                    storage[user_id]["links"] = []
-                    self._write_storage(storage)
+                # Clear user storage
+                user_storage = self._read_user_storage()
+                if user_id in user_storage:
+                    user_storage[user_id]["links"] = []
+                    self._write_user_storage(user_storage)
+                
+                # Update global storage
+                all_user_links: Set[str] = set()
+                for user_data in user_storage.values():
+                    all_user_links.update(user_data["links"])
+                
+                self._write_global_storage(sorted(list(all_user_links)))
                 return True
             except Exception as e:
                 logger.error(f"Error clearing links for user {user_id}: {e}")

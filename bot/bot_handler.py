@@ -17,6 +17,7 @@ from .message_templates import (
     LINK_VALIDATION_PARTIAL,
     NO_LINKS_FOUND
 )
+from validators.link_validator import LinkValidator
 
 # Configure logging
 logging.basicConfig(
@@ -31,6 +32,7 @@ class BotHandler:
     def __init__(self, token: str):
         """Initialize bot with token."""
         self.application = Application.builder().token(token).build()
+        self.link_validator = LinkValidator()
         self._register_handlers()
     
     def _register_handlers(self):
@@ -65,10 +67,38 @@ class BotHandler:
         message_text = update.message.text
         
         logger.info(f"Received message from user {user.id} ({user.username})")
-        # This is a placeholder - actual link processing will be implemented later
-        await update.message.reply_text(
-            "Message received! Link processing will be implemented in the next steps."
-        )
+        
+        # Validate links
+        validation_results = self.link_validator.validate_links(message_text)
+        
+        if not validation_results:
+            await update.message.reply_text(NO_LINKS_FOUND)
+            return
+        
+        # Count valid and invalid links
+        valid_links = [
+            result.normalized_link
+            for result in validation_results.values()
+            if result.is_valid
+        ]
+        total_links = len(validation_results)
+        valid_count = len(valid_links)
+        
+        # Prepare response message
+        if valid_count == 0:
+            await update.message.reply_text(NO_LINKS_FOUND)
+        elif valid_count == total_links:
+            await update.message.reply_text(
+                LINK_VALIDATION_SUCCESS.format(valid_count)
+            )
+        else:
+            await update.message.reply_text(
+                LINK_VALIDATION_PARTIAL.format(
+                    total_links,
+                    valid_count,
+                    total_links - valid_count
+                )
+            )
     
     async def _error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE):
         """Handle errors."""
